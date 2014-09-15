@@ -1,46 +1,52 @@
-#include <sys/ptrace.h>
-#include <sys/types.h>
-#include <string.h>
-#include <stdio.h>
-#include <errno.h>
-#include <math.h>
-
-const long RSAPTR = 0x82bf200;
-const int RSALEN = 310;
-const char RSA_KEY[] = "109120132967399429278860960508995541528237502902798129123468757937266291492576446330739696001110603907230888610072655818825358503429057592827629436413108566029093628212635953836686562675849720620786279431090218017681061521755056710823876476444260558147179707119674283982419152118103759076030616683978566631413";
-
-const long HOSTNAMEPTR = 0x84dc6bc;
-
-const int LEN = 32;
-
-pid_t findPid(char* name);
-int readMemory(pid_t pid, long addr, char *data, unsigned size);
-int writeMemory(pid_t pid, long addr, char *data, unsigned size);
-int chartohex(unsigned char *data);
+#include "main.h"
 
 int main(int argc, char** argv)
 {
+	if(argc < 3)
+		usage();
+
+	long rsaptr = getRSAPointer(argv[1]);
+	long hostptr = getHostPointer(argv[1]);
+
+	printf("%lo   %lo", rsaptr, hostptr);
+
+	int childpid = fork();
+	if(childpid == -1)
+		fatal("Unable to fork.");
+
+	if(childpid == 0)
+	{
+		printf("I'm the child");
+		//chdir(TIBIA_ENV);
+		execl(TIBIA_PATH, (const char*) NULL, (char*) NULL);
+		exit(0);
+	}
+
+	sleep(2);
 	pid_t pid = findPid("Tibia");
 
-	printf("Tibia pid: %d\n", pid);
-
-	
+	//write RSA key
 	char data[310] = "";
 	strcpy(data, RSA_KEY);
-	writeMemory(pid, RSAPTR, data, RSALEN);
+	writeMemory(pid, rsaptr, data, RSALEN);
 	
-	readMemory(pid, RSAPTR, data, RSALEN);
+	//DEBUG
+	readMemory(pid, rsaptr, data, RSALEN);
+	printf("rsa: %s\n", data);
+	//DEBUG
 	
+	//read pointer to Hostname struct
 	unsigned char ptrdata[4] = "";
-	readMemory(pid, HOSTNAMEPTR, ptrdata, 4);
+	readMemory(pid, hostptr, ptrdata, 4);
 
+	//read offset+4 on Hostname struct
 	readMemory(pid, chartohex(ptrdata)+4, ptrdata, 4);
-	char loc[255] = "";
-   	strcpy(loc,argv[1]);
-	int len = 255;
-	writeMemory(pid, chartohex(ptrdata), loc, 26); 
+	char loc[26] = "";
+   	strcpy(loc,argv[2]);
+	int len = 26;
+	writeMemory(pid, chartohex(ptrdata), loc, len); 
 
-	readMemory(pid,chartohex(ptrdata), data, 26);
+	readMemory(pid,chartohex(ptrdata), data, 30);
 	printf("IP changed to: %s\n", data);
 
 	return 1;
@@ -66,17 +72,18 @@ pid_t findPid(char* name)
 	fgets(line, LEN, cmd);
 	pid_t pid = strtoul(line, NULL, 10);
 	pclose(cmd);
+	if(pid == 0)
+		fatal("Could not find Tibia process");
 	return pid;
 }
 
 int readMemory(pid_t pid, long addr, char *data, unsigned size)
 {
 	if(ptrace(PTRACE_ATTACH, pid, 0, 0) != 0) {
-		fprintf(stderr, "error: failed to attach to %d, %s\n", pid, strerror(errno));
+		fatal("Could not attach to Tibia process. Try running this program as root");
 	}
 
-
-	wait(0);
+	wait(NULL);
 
 	int i;
 	for(i = 0;i<size;i+=sizeof(int)){
@@ -94,7 +101,7 @@ int readMemory(pid_t pid, long addr, char *data, unsigned size)
 int writeMemory(pid_t pid, long addr, char *data, unsigned size)
 {
 	if(ptrace(PTRACE_ATTACH, pid, 0, 0) != 0) {
-		fprintf(stderr, "error: failed to attach to %d, %s\n", pid, strerror(errno));
+		fatal("Could not attach to Tibia. Try running this program as root");
 	}
 
 	wait(NULL);
@@ -107,8 +114,38 @@ int writeMemory(pid_t pid, long addr, char *data, unsigned size)
 	}
 
 	if(ptrace(PTRACE_DETACH, pid, 0, 0)!=0)
-		return -1;
+		fatal("Could not detach from Tibia process. Try running this program as root");
 
 	return 1;
 }
 
+void fatal(char *msg)
+{
+	printf("Fatal error: %s\n", msg);
+	exit(0);
+}
+
+void usage()
+{
+	printf("Usage: ipchanger [version] [IP]\n");
+	exit(0);
+}
+
+long getRSAPointer(char *version)
+{
+	if(strcmp(version,"10.31") == 0)
+		return RSAPTR31;
+	if(strcmp(version,"10.37") == 0)
+		return RSAPTR37;
+	fatal("Version not supported.");
+	return (long)NULL;
+}
+
+long getHostPointer(char *version) {
+	if(strcmp(version,"10.31") == 0)
+		return HOSTNAMEPTR31;
+	if(strcmp(version,"10.37") == 0)
+		return HOSTNAMEPTR37;
+	fatal("Version not supported.");
+	return (long)NULL;
+}
